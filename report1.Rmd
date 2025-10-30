@@ -1,0 +1,687 @@
+---
+title: "Forest policies and tree cover loss in Africa"
+author: "Abdul Baari Bakpa"
+date: "September, 2025"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    latex_engine: xelatex
+    keep_tex: true
+    fig_caption: true
+    fig_width: 6
+    fig_height: 4
+    highlight: tango
+    citation_package: natbib
+    includes:
+      in_header: header.tex
+geometry: "left=0.5in, right=0.5in, top=1in, bottom=0.9in"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse) 
+library(fixest) 
+library(here) 
+library(haven) 
+library(sf)
+
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(wdpar)
+
+```
+
+
+
+# Project Objective
+ The study identify forest policies across afric and estimates how these  policies  and traditional dsignated protected areas influence forest cover loss across a panel of African countries using a Difference-in-Differences design, and the report walks through the descriptive evidence and regression results that support the analysis. 
+ Note that policy  and intervention are use interchangeably in the report.
+
+# Data Sources 
+**Forest polices** self constructed dataset.
+
+**Protected Areas** from [World Database on Protected Areas (WDPA)](https://www.protectedplanet.net/en/thematic-areas/wdpa?tab=WDPA) 
+
+# Forest Policies
+
+Forest policies encompass the laws, regulations, and strategies that governments and organizations use to conserve forest resources while balancing ecological, economic, and social goals. Because protected areas already have a comprehensive, well-documented framework, this study forest policy concentrates on other locally implemented measures designed to safeguard existing forests—even when those initiatives overlap with protected-area boundaries.
+
+##  Policy Identification and Collection
+**Sources**: We identify these policies primarily through a systematic review of academic literature, government reports, and NGO publications. We also leverage databases and repositories that catalogue environmental policies and initiatives.
+
+**Categorization** This policies are categorise following [Börner et al. (2020)](https://doi.org/10.1146/annurev-resource-110119-025703)into the following categories:
+
+- *Decentralise Forest Management(DFM)*: Throughout the literature there are different terms used to describe decentralised forest management, including community-based forest management (CBFM), joint forest management (JFM), collaborative forest management (CFM), participatory forest management (PFM), and community forestry (CF). In this project we use the term decentralised forest management to refer to all these terms.
+
+- *Land Titling and Reforms*
+- *Payment for Ecosystem Services(PES)*: This includes some  REDD+(depending on the description of the project) and other PES schemes
+
+- *Indeginous Protected Areas(IPL)*: This includes Territories and areas conserved by indigenous peoples and local communities (ICCAs) and other indigenous protected areas.
+
+- *Certification*
+
+- *Voluntary conservation*
+
+- *Integrated Conservation and Development Projects(ICDP)*: This also include REDD+ projects that have a livelihood component. Some REDD+ protect are exclued from the entire collecton as there more of reforestation projects than protecting an already existing forest protection projects.
+
+- *Governance*
+
+- *Sustainable Use*
+
+The dataset of the identified  policies are summarise in table 1
+
+```{r variable-table, warning=FALSE, message=FALSE, results='asis' , fig.pos='H'}
+# Create a data frame with the variable descriptions
+variable_data <- data.frame(
+  `Variable Name` = c("Intervention type", "Specific type", "Name", "Forest size (ha)", 
+                      "Project start", "Project start notes", "Project end", 
+                      "Effect size on forest cover change", "Authors", "Title", 
+                      "Journal", "Year", "Country", "NAME_1", "GID_1", "GID_2", 
+                      "NAME_2", "Link"),
+  Description = c("The type of forest policy implemented (e.g., DFM, PES, etc.).",
+                  "Gives more details on the intervention type (e.g., for DFM, this could be CBFM, JFM).",
+                  "The name of the policy or project as stated in the source document.",
+                  "The size of the forest area covered by the policy. Empty if not stated.",
+                  "The year the policy or project started. Empty if not stated.",
+                  "Any notes on the project start year for cases where it is not clearly stated.",
+                  "The year the policy or project ended or is projected to end. Empty if not stated.",
+                  "The reported effect size of the policy on forest cover change. Empty if not stated.",
+                  "The authors of the source document.",
+                  "The title of the source document.",
+                  "The journal where the source document was published.",
+                  "The year the source document was published.",
+                  "The country where the policy is implemented.",
+                  "The first-level administrative division (e.g., state, province).",
+                  "The unique identifier for the first-level administrative division.",
+                  "The unique identifier for the second-level administrative division (e.g., district, county).",
+                  "The second-level administrative division where the policy is implemented.",
+                  "A URL link to the source document if available online.")
+)
+
+# Create the table with kableExtra
+variable_data %>%
+  kbl(col.names = c("Variable Name", "Description"),
+      caption = "Structure   of the  Forest Policy dataset",
+      align = c('l', 'l')) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  column_spec(1, width = "12em") %>%  # Set width for the first column
+  column_spec(2, width = "30em")   # Set width for the second column
+
+
+```
+
+## Descriptives of  Identified Policies 
+These section provides a summary and visualizations of the forest policy dataset. 
+```{r policy-summary-2, warning=FALSE, message=FALSE, fig.pos='H'}
+ipums_policy <- st_read(
+  here("data/built/ForestPolicy_ipums_id.gpkg"),
+  quiet = TRUE
+)
+
+```
+```{r policy-summary-3, warning=FALSE, message=FALSE, fig.pos='H'}  
+#the numer of policies by country and intervention type in cross tabular format
+ipums_policy %>%
+  st_set_geometry(NULL) %>%
+  mutate(`Intervention.type` = case_when(
+    `Intervention.type` == "Sustainable use" ~ "Sustainable Use",
+    `Intervention.type` == "sustainable Use" ~ "Sustainable Use",
+    `Intervention.type` == "certification" ~ "Certification",
+    `Intervention.type` == "governance" ~ "Governance",
+    TRUE ~ `Intervention.type`
+  )) %>%
+  count(country, `Intervention.type`) %>%
+  pivot_wider(names_from = `Intervention.type`, values_from = n, values_fill = 0) %>%
+  mutate(Total = rowSums(across(where(is.numeric)))) %>%
+  select(country, everything(), Total) %>%
+  {
+    n_cols <- ncol(.)
+    kbl(., caption = " Number of Forest Policies by Country and Intervention Type",
+        align = 'l') %>%
+      kable_styling(bootstrap_options = c("striped", "hover"),
+                    full_width = FALSE) %>%
+      column_spec(1, width = "6em") %>%  # Country column
+      # Specific columns to squeeze
+      column_spec(which(names(.) %in% c("DFM", "IPL", "ICDP","Land titling and reform", "PES", "Total")), width = "3em") %>%
+      kable_styling(font_size = 8) %>%
+      row_spec(0, extra_css = "white-space: normal; word-wrap: break-word;")
+  }
+```
+
+```{r policy-stackbar, fig.width=6, fig.height=4, out.width="80%", fig.align='center', warning=FALSE, message=FALSE, fig.pos='H'}
+
+# First, create the data for the bar chart
+policy_data <- ipums_policy %>%
+  st_set_geometry(NULL) %>%
+  mutate(`Intervention.type` = case_when(
+    `Intervention.type` == "Sustainable use" ~ "Sustainable Use",
+    `Intervention.type` == "sustainable Use" ~ "Sustainable Use",
+    TRUE ~ `Intervention.type`
+  )) %>%
+  count(country, `Intervention.type`)
+
+# Create stacked bar chart
+ggplot(policy_data, aes(x = country, y = n, fill = `Intervention.type`)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(aes(label = n), position = position_stack(vjust = 0.5), 
+            size = 3, color = "white") +
+  labs(title = "Number of Forest Policies by Country and Intervention Type",
+       x = "Country",
+       y = "Number of Policies",
+       fill = "Intervention Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom")
+```
+
+```{r policy-bar, fig.width=6, fig.height=4, out.width="80%", fig.align='center', warning=FALSE, message=FALSE, fig.pos='H'}
+# Calculate frequency and percentages
+policy_freq <- ipums_policy %>%
+  st_set_geometry(NULL) %>%
+  mutate(`Intervention.type` = case_when(
+    `Intervention.type` == "Sustainable use" ~ "Sustainable Use",
+    `Intervention.type` == "sustainable Use" ~ "Sustainable Use",
+    TRUE ~ `Intervention.type`
+  )) %>%
+  count(`Intervention.type`, name = "count") %>%
+  mutate(percentage = (count / sum(count)) * 100,
+         label = paste0(count, "\n(", round(percentage, 1), "%)"))
+
+# Create bar chart with percentage labels
+ggplot(policy_freq, aes(x = reorder(`Intervention.type`, -count), y = count, fill = `Intervention.type`)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = label), vjust = -0.5, size = 3.5, color = "black", fontface = "bold") +
+  labs(title = "Frequency of Forest Policy Intervention Types",
+       x = "Intervention Type",
+       y = "Number of Policies",
+       fill = "Intervention Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +  # Remove legend since x-axis shows types
+  scale_fill_viridis_d() +
+  ylim(0, max(policy_freq$count) * 1.1)  # Add space for labels
+```
+```{r policy-lillipop_graph, fig.width=6, fig.height=4, out.width="70%", fig.align='center', warning=FALSE, message=FALSE, fig.pos='H'}
+
+
+# Calculate policies per country
+country_counts <- ipums_policy %>%
+  st_set_geometry(NULL) %>%
+  count(country, name = "policy_count") %>%
+  arrange(policy_count)
+# Enhanced lollipop chart
+ggplot(country_counts, aes(x = policy_count, y = reorder(country, policy_count))) +
+  geom_segment(aes(x = 0, xend = policy_count, y = reorder(country, policy_count), yend = reorder(country, policy_count)),
+               color = "gray70", linewidth = 0.8) +
+  geom_point(aes(size = policy_count, color = policy_count), alpha = 0.8) +
+  geom_text(aes(label = policy_count), hjust = -0.8, size = 3.2, fontface = "bold", color = "darkblue") +
+  scale_color_gradient(low = "lightblue", high = "darkblue", guide = "none") +
+  scale_size(range = c(2, 6), guide = "none") +
+  labs(title = "Number of Forest Policies by Country",
+       subtitle = "Total policies implemented per country",
+       x = "Number of Policies",
+       y = NULL) +
+  theme_minimal() +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(color = "gray50", size = 11),
+        axis.text.y = element_text(size = 10))
+```
+
+
+```{r policy-cummulative_graph, fig.width=6, fig.height=4, out.width="70%", fig.align='center', warning=FALSE, message=FALSE, fig.pos='H'}
+# Set the year range explicitly
+start_year_range <- 1990
+end_year_range <- 2020
+
+# Create sequence of years from 1990 to 2020
+all_years <- seq(start_year_range, end_year_range)
+
+# Calculate policies active each year (1990-2020)
+yearly_active <- map_df(all_years, ~{
+  ipums_policy %>%
+    st_set_geometry(NULL) %>%
+    mutate(
+      start_year = as.numeric(Project.start),
+      end_year = as.numeric(Project.end)
+    ) %>%
+    filter(
+      !is.na(start_year),
+      start_year <= .x,
+      is.na(end_year) | end_year >= .x
+    ) %>%
+    summarize(year = .x, active_count = n())
+})
+
+# For cumulative count, we need to include policies that started before 1990
+cumulative_started <- ipums_policy %>%
+  st_set_geometry(NULL) %>%
+  mutate(start_year = as.numeric(Project.start)) %>%
+  filter(!is.na(start_year)) %>%
+  # Count all policies that started by each year
+  count(start_year, name = "started_count") %>%
+  {.} -> all_starts
+
+# Create cumulative count from beginning to 2020
+all_years_full <- seq(min(all_starts$start_year, na.rm = TRUE), 2020)
+
+cumulative_full <- data.frame(year = all_years_full) %>%
+  left_join(all_starts, by = c("year" = "start_year")) %>%
+  mutate(started_count = replace_na(started_count, 0)) %>%
+  arrange(year) %>%
+  mutate(cumulative_count = cumsum(started_count)) %>%
+  filter(year >= 1990 & year <= 2020)  # Filter to our desired range
+
+# Combine with yearly active data
+policy_metrics <- yearly_active %>%
+  full_join(cumulative_full, by = "year") %>%
+  mutate(active_count = replace_na(active_count, 0))
+
+# Create the plot
+scale_factor <- max(policy_metrics$cumulative_count, na.rm = TRUE) / 
+                max(policy_metrics$active_count, na.rm = TRUE) * 0.8
+
+ggplot(policy_metrics, aes(x = year)) +
+  geom_bar(aes(y = active_count), stat = "identity", fill = "steelblue", alpha = 0.6) +
+  geom_line(aes(y = cumulative_count/scale_factor), color = "darkred", linewidth = 1.2) +
+  geom_point(aes(y = cumulative_count/scale_factor), color = "darkred", size = 2) +
+  scale_x_continuous(breaks = seq(1990, 2020, by = 2)) +
+  scale_y_continuous(
+    name = "Active Policies",
+    sec.axis = sec_axis(~ . * scale_factor, name = "Cumulative Policies")
+  ) +
+  labs(title = "Forest Policy Activity (1990-2020)",
+       x = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r policy-mappolicies, fig.width=10, fig.height=8, warning=FALSE, message=FALSE , fig.pos='H'}
+# Get Kenya admin boundaries
+kenya_admin <- st_read(here("data/raw/maps/SampleUnits.shp"), , quiet = TRUE) %>%
+  filter(country == "Kenya") %>%
+  st_transform(st_crs(ipums_policy))
+
+# Filter policies for Kenya
+kenya_policies <- ipums_policy %>%
+  filter(country == "Kenya")
+
+# Spatial join to count policies per admin2 area
+kenya_admin_with_counts <- kenya_admin %>%
+  mutate(policy_count = lengths(st_intersects(kenya_admin, kenya_policies)))
+
+# Get centroids for labeling
+kenya_centroids <- kenya_admin_with_counts %>%
+  st_centroid() %>%
+  mutate(lon = st_coordinates(.)[,1],
+         lat = st_coordinates(.)[,2])
+
+# Plot
+ggplot() +
+  # Base layer: Kenya admin boundaries with a light neutral fill
+  geom_sf(data = kenya_admin_with_counts,
+          fill = "grey95", color = "grey70", size = 0.3) +
+  
+  
+  # Add policy count numbers in white on top
+  geom_text(data = kenya_centroids,
+            aes(x = lon, y = lat, label = policy_count),
+            size = 4, fontface = "bold", color = "black") +
+  
+  labs(title = "Forest Policy Distribution in Kenya",
+       subtitle = "Numbers show policy count per admin2 region") +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )   
+```
+
+```{r policy-map-2, fig.width=10, fig.height=8, warning=FALSE, out.width= "120%"  ,message=FALSE, fig.pos='H'}
+# --- countries to highlight ---
+iso_keep <- c("CMR","MOZ","KEN","GHA","ZAF","BEN","RWA","UGA","TZA","BFA",
+              "MWI","ZMB","SEN","ZWE","MLI","SDN","BWA","COD")
+
+# --- Africa base map (sf) ---
+africa <- rnaturalearth::ne_countries(continent = "Africa", scale = "medium", returnclass = "sf") |>
+  st_make_valid() |>
+  dplyr::select(iso_a3, name, geometry)
+
+# --- policy counts by ISO_A3 (drop geometry first) ---
+policy_counts <- ipums_policy |>
+  st_drop_geometry() |>
+  mutate(ISO_A3 = trimws(ISO_A3)) |>
+  count(ISO_A3, name = "n_policies")
+
+# --- join + mark highlight countries ---
+africa_join <- africa |>
+  left_join(policy_counts, by = c("iso_a3" = "ISO_A3")) |>
+  mutate(highlight = iso_a3 %in% iso_keep)
+
+# --- classify small vs large countries (as before) ---
+africa_eq <- st_transform(africa_join, 6933)
+africa_join <- africa_join |>
+  mutate(area_km2 = as.numeric(st_area(africa_eq)) / 1e6)
+
+small_thr_km2 <- 150000
+
+# Split data
+small_df <- africa_join |>
+  filter(highlight, !is.na(n_policies), area_km2 <  small_thr_km2)
+
+large_df <- africa_join |>
+  filter(highlight, !is.na(n_policies), area_km2 >= small_thr_km2)
+
+# ---- SMALL: get numeric coords for ggrepel ----
+pts_small      <- st_point_on_surface(small_df)
+coords_small   <- as.data.frame(st_coordinates(pts_small))
+# coords_small will have columns named "X","Y"; if not, name them:
+if (is.null(colnames(coords_small))) colnames(coords_small) <- c("X","Y")
+
+labs_small <- bind_cols(
+  st_drop_geometry(small_df),  # attributes (incl. n_policies)
+  coords_small                  # X, Y
+)
+
+# ---- LARGE: keep sf points for geom_sf_text (stays inside polygons) ----
+labs_large <- st_point_on_surface(large_df)  # sf POINTS with same attributes
+
+
+# --- styling ---
+base_border_col <- "grey70"
+hl_fill_col     <- "#E6F5E6"
+hl_border_col   <- "#2B8CBE"
+
+# --- plot ---
+ggplot() +
+  geom_sf(data = africa_join, fill = NA, color = "grey70", linewidth = 0.25) +
+  geom_sf(data = subset(africa_join, highlight),
+          fill = "#E6F5E6", color = "#2B8CBE", linewidth = 0.8) +
+  # labels inside for large countries
+  geom_sf_text(
+    data = labs_large,
+    aes(label = n_policies),
+    fontface = "bold", size = 4, color = "black"
+  ) +
+  # repelled labels for small countries
+  geom_text_repel(
+    data = labs_small,
+    aes(x = X, y = Y, label = n_policies),
+    size = 4, fontface = "bold", color = "black",
+    box.padding = 0.25, point.padding = 0.15,
+    min.segment.length = 0, max.overlaps = Inf
+  ) +
+  labs(
+    title = "Forest Policy Countries in Africa",
+    subtitle = "Only selected countries are highlighted; labels show total policies"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+
+```
+
+\newpage
+
+## Regression analysis 
+```{r regression-setup, warning=FALSE, message=FALSE}
+# Load the main dataset
+policies_forestloss <- read_dta(here("data","built","policies_forestloss_newvars.dta"))
+```
+
+We estimate the policy effect using a Difference-in-Differences (DiD) design that
+contrasts treated IPUMs units (with forest policies) against control units (without
+policies), while absorbing year and country fixed effects. The model takes the form
+
+
+$$
+Y_{it}^p = \alpha + \beta\,\mathrm{Policy}_{it} + \delta_t + \mu_i + \varepsilon_{it}      \tag{1}
+$$
+
+
+
+
+where
+
+- $Y_{it}^p$ is the forest cover as a share of total area  for unit $i$ in year $t$ at threshold $p$
+  (e.g., $p \in \{10\%,  30\%,  50\}$). We compute the share as
+  $\left(\text{tree cover  area} / \text{total admin unit area}(KM^2)\right)$.
+- $\mathrm{Policy}_{it}$ equals 1 when unit $i$ is covered by a forest policy in year $t$,
+  and 0 otherwise.
+- $\delta_t$ are year fixed effects .
+- $\mu_i$ are unit fixed effects.
+
+
+```{r policy_dummy, warning=FALSE, message=FALSE, results='asis', fig.pos='H'}
+
+#regression of forest share on policy dummy, binary treatment variable
+model_dummy_30 <- feols(forest_share_30 ~ totalpolicies_dummy | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)
+
+ model_dummy_50 <- feols(forest_share_50 ~ totalpolicies_dummy | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)                       
+model_dummy_10 <- feols(forest_share_10 ~ totalpolicies_dummy | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)
+
+
+etable(
+  model_dummy_10, model_dummy_30,   model_dummy_50,
+       title = "Effect of policy on forest cover as a share of total adim unit area",
+       dict = c(forest_share_10 = "Forest Share_10",
+                forest_share_30 = "Forest Share_30",
+                forest_share_40 = "Forest Share_40",
+                forest_share_50 = "Forest Share_50",
+                totalpolicies_dummy = "Policy Dummy"),
+       tex = TRUE)
+```
+
+We also estimate a specification that replaces the binary policy indicator with the
+number of active policies in each unit-year:
+
+
+$$
+Y_{it}^p = \alpha + \beta\,\mathrm{TotalActivePolicies}_{it} + \delta_t + \mu_i + \varepsilon_{it},       \tag{2}
+$$
+
+
+
+where $\mathrm{TotalActivePolicies}_{it}$ counts the forest policies active in unit $i$
+during year $t$, and all remaining terms are defined in (1). The results are presented in Table 4.
+
+```{r regression_policy_dummy, warning=FALSE, message=FALSE, results='asis', fig.pos='H'}
+#regression of forest share on total number of policies, continuos treatment variable
+model_count_30 <- feols(forest_share_30 ~ total_active_projects0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~ipums_id)
+
+
+model_count_20 <- feols(forest_share_20 ~ total_active_projects0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~ipums_id)
+
+model_count_40 <- feols(forest_share_40 ~ total_active_projects0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~ipums_id)
+
+
+
+model_count_50 <- feols(forest_share_50 ~ total_active_projects0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~ipums_id)
+
+# display the regression results in a table
+etable(
+   model_count_20, model_count_30, model_count_40, model_count_50,
+  title = "Effect of Total Number of Active Projects on Forest Share",
+  dict = c(
+    forest_share_10 = "Forest Share_10",
+    forest_share_20 = "Forest Share_20",
+    forest_share_30 = "Forest Share_30",
+    forest_share_40 = "Forest Share_40",
+    forest_share_50 = "Forest Share_50",
+    total_active_projects0 = "Total ActivePolicies"
+  ),
+  tex = TRUE
+)
+```
+
+Finally, we estimate policy-type-specific effects at the 30 % tree-cover threshold by regressing forest share on indicator variables for each policy category. The model is specified as:
+
+
+$$
+Y_{it}^{30} = \alpha  + \beta_k\,D_{it}^{(k)} + \delta_t + \mu_i + \varepsilon_{it},       \tag{3}
+$$
+
+where $Y_{it}^{30}$ is the share of tree cover (30% threshold) in unit i and year t and $D_{it}^{(k)}$ is the dummy for policy type $k \in \left\{\text{DFM}, \text{IPL}, \text{PES}, \text{ICDP}\right\}$  We estimate separate models for each policy type. The results are presented in Table 5.
+
+
+```{r regression-type, warning=FALSE, message=FALSE, results='asis', fig.pos='H'}
+model_dfmdummy <- feols(forest_share_30 ~ dfm_dummy0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)
+model_ipldummy <- feols(forest_share_30 ~ ipl_dummy0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)
+ model_pesdummy <- feols(forest_share_30 ~ pes_dummy0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)                       
+model_icdpdummy <- feols(forest_share_30 ~ icdp_dummy0 | ipums_id + year, 
+                        data = policies_forestloss, cluster = ~admin_name)
+
+etable( model_dfmdummy, model_ipldummy, model_pesdummy, model_icdpdummy, 
+       title = "Effect of  Policy Types on Forest Share (30% threshold)",
+       dict = c(
+         forest_share_30 = "Forest Share_30",
+         dfm_dummy0 = "DFM",
+         ipl_dummy0 = "IPL",
+         pes_dummy0 = "PES",
+         icdp_dummy0 = "ICDP"
+       ),
+        tex = TRUE)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+\newpage
+
+
+## Protected Areas 
+These protected areas are only for the countries in the ipums units tree_cover  dataset. they include: Ghana, Kenya, Mozambique, Cameroon, South Africa, Benin, Rwanda, Uganda, Tanzania, Burkina Faso, Malawi, Zambia, Senegal, Zimbabwe, Mali, Sudan, Botswana, and Democratic Republic of Congo.
+
+```{r pa-setup, warning=FALSE, message=FALSE}
+# Load and prepare the protected areas data
+PA__data <- read_dta(here("data","built","PA_forestloss.dta"))
+```
+
+```{r pa-summary_country, warning=FALSE, message=FALSE}
+PA_poly <- read_sf(here("data","built","PAs_poly.gpkg")) |> 
+  st_drop_geometry(geom)
+```
+```{r pa-summarybar-PA, warning=FALSE, message=FALSE, fig.width=10, fig.height=8, out.width="45%", fig.align='center', fig.pos='H'}
+PA_poly %>%                                    
+  count(ISO3, name = "n") %>%                                    # count WDPAIDs per ISO3
+  ggplot(aes(x = reorder(ISO3, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  labs(x = "ISO3", y = "Number of protected areas", title = "Protected areas per country") +
+  coord_flip() +
+  theme_minimal()
+```
+
+```{r PA_cumsum_year, warning=FALSE, message=FALSE, fig.width=10, fig.height=8, out.width="45%", fig.align='center', fig.pos='H'}
+
+
+
+# 1) One row per PA
+pas <- PA_poly %>%
+  distinct(WDPAID, .keep_all = TRUE)
+
+# 2) Baseline stock before 2000
+baseline_2000 <- pas %>%
+  filter(!is.na(STATUS_YR), STATUS_YR < 2000L) %>%
+  nrow()
+
+# 3) True yearly additions 2000–2020 (no recoding)
+yearly <- pas %>%
+  filter(!is.na(STATUS_YR), STATUS_YR >= 2000L, STATUS_YR <= 2020L) %>%
+  count(year = as.integer(STATUS_YR), name = "n_new") %>%
+  complete(year = 2000:2020, fill = list(n_new = 0L)) %>%
+  arrange(year) %>%
+  mutate(cum_total = baseline_2000 + cumsum(n_new))
+
+# 4) Plot: bars = yearly additions; line = cumulative (with baseline)
+sf <- max(yearly$n_new, na.rm = TRUE) / max(yearly$cum_total, na.rm = TRUE)
+
+ggplot(yearly, aes(x = year)) +
+  geom_col(aes(y = n_new), width = 0.8, alpha = 0.85) +
+  geom_line(aes(y = cum_total * sf), linewidth = 1) +
+  geom_point(aes(y = cum_total * sf), size = 1.6) +
+  scale_y_continuous(
+    name = "New protected areas (per year)",
+    sec.axis = sec_axis(~ . / sf, name = "Cumulative protected areas")
+  ) +
+  labs(
+    title = "Protected Areas: New and Cumulative (All Countries, 2000–2020)",
+    x = NULL,
+    caption = "Cumulative starts with stock established before 2000."
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+```{r data-prep} 
+# Load the dataset
+PA_forestloss <- read_dta(here("data","built", "PA_forestloss.dta"))
+```
+
+We again estimate the effect of traditional designated protected areas on forest cover as a share of total area  for admin unit using two different specifications: one with a continuous treatment variable (the count of protected areas) and another with a binary treatment variable (a dummy indicating the presence of any protected area). The models are specified as  in (1) and (2), replacing the policy variable with either the count or dummy of protected areas. The results are presented in Tables 6 and 7.
+
+```{r regresion , share of treecover at different thresholds on PA_count, warning=FALSE, message=FALSE, results='asis', fig.pos='H'}
+
+
+model_count10 <- feols(Share_forest_10 ~ PA_count | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+model_count20 <- feols(Share_forest_20 ~ PA_count | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+
+
+model_count30 <- feols(Share_forest_30 ~ PA_count | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+
+model_count90 <- feols(Share_forest_90 ~ PA_count | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+etable(model_count10, model_count20, model_count30, model_count90, tex=TRUE,
+      title = "Effect of Protected Areas(Continuous) on Forest Share at Different Thresholds"
+
+)
+```
+
+```{r regression, share of treecover at different thresholds on PA_dummy, warning=FALSE, message=FALSE, results='asis'}
+model_dummy10 <- feols(Share_forest_10 ~ PA_dummy | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+model_dummy20 <- feols(Share_forest_20 ~ PA_dummy | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+
+
+model_dummy30 <- feols(Share_forest_30 ~ PA_dummy | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+
+model_dummy90 <- feols(Share_forest_90 ~ PA_dummy | ipums_id + year , cluster = ~ipums_id,  data= PA_forestloss)
+
+etable(model_dummy10, model_dummy20, model_dummy30, model_dummy90, tex=TRUE
+      , title = "Effect of Protected Areas(dummy) on Forest Share at Different Thresholds"
+
+)
+
+```
